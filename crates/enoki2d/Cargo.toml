@@ -9,16 +9,6 @@ repository = "https://github.com/Lommix/bevy_enoki"
 license = "MIT"
 readme = "README.md"
 
-[features]
-dev = [
-    "bevy_app/trace",
-    "bevy_asset/trace",
-    "bevy_render/trace",
-    "bevy_core_pipeline/trace",
-    "bevy_render/tracing-tracy",
-    "bevy_render/tracing-tracy"
-]
-
 [dependencies]
 bevy_asset = { version = "0.17" }
 bevy_core_pipeline = { version = "0.17" }
