@@ -1,4 +1,4 @@
-use super::{prelude::EmissionShape, Particle2dEffect, ParticleEffectHandle};
+use super::{Particle2dEffect, ParticleEffectHandle, prelude::EmissionShape};
 use crate::values::Random;
 use bevy_asset::Assets;
 use bevy_camera::primitives::Aabb;
@@ -12,7 +12,7 @@ use bevy_ecs::{
     system::{Commands, Query, Res},
 };
 use bevy_math::{Vec2, Vec3};
-use bevy_reflect::{prelude::ReflectDefault, Reflect};
+use bevy_reflect::{Reflect, prelude::ReflectDefault};
 use bevy_tasks::{ComputeTaskPool, ParallelSliceMut};
 use bevy_time::{Time, Timer, TimerMode, Virtual};
 use bevy_transform::components::{GlobalTransform, Transform};
@@ -76,6 +76,8 @@ pub struct Particle {
     pub(crate) angular_damp: f32,
     pub(crate) gravity_speed: f32,
     pub(crate) gravity_direction: Vec3,
+    /// Set to true when a particle reaches an attractor with `despawn_on_arrival`.
+    pub(crate) reached_attractor: bool,
 }
 
 pub(crate) fn clone_effect(
@@ -174,7 +176,8 @@ pub(crate) fn update_spawner(
                     update_particle(particle, effect, delta, spawner_world_pos);
                 }
             });
-            store.retain(|particle| particle.duration_fraction < 1.0);
+            store
+                .retain(|particle| particle.duration_fraction < 1.0 && !particle.reached_attractor);
         },
     );
 }
@@ -268,6 +271,7 @@ fn create_particle(effect: &Particle2dEffect, transform: &Transform) -> Particle
         gravity_direction,
         gravity_speed,
         frame: 0,
+        reached_attractor: false,
     }
 }
 
@@ -314,9 +318,39 @@ fn update_particle(
     }
 
     let gravity = particle.gravity_direction * particle.gravity_speed * delta;
+    let movement = *lin_velo * delta + gravity;
+    let old_pos = particle.transform.translation;
 
-    particle.transform.translation += *lin_velo * delta + gravity;
+    particle.transform.translation += movement;
     particle.transform.rotate_local_z(*rot_velo * delta);
+
+    // Check if particle reached any attractor with despawn_on_arrival enabled
+    if let Some(attractors) = &effect.attractors {
+        for attractor in attractors.iter() {
+            if !attractor.despawn_on_arrival {
+                continue;
+            }
+
+            let attractor_world_pos = spawner_world_pos + attractor.position.extend(0.0);
+            let to_attractor = attractor_world_pos - particle.transform.translation;
+            let distance_sq = to_attractor.length_squared();
+            let min_distance_sq = attractor.min_distance * attractor.min_distance;
+
+            // Particle is within capture radius
+            if distance_sq <= min_distance_sq {
+                particle.reached_attractor = true;
+                return;
+            }
+
+            // Fast particle detection: crossed past the attractor in one frame
+            // (was approaching, now receding)
+            let old_to_attractor = attractor_world_pos - old_pos;
+            if old_to_attractor.dot(movement) > 0.0 && to_attractor.dot(movement) < 0.0 {
+                particle.reached_attractor = true;
+                return;
+            }
+        }
+    }
 }
 
 pub(crate) fn calculcate_particle_bounds(

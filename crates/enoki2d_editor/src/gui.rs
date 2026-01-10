@@ -3,16 +3,16 @@ use std::ops::RangeInclusive;
 
 use bevy::prelude::*;
 use bevy_egui::{
-    egui::{
-        self, emath::Numeric, style::HandleShape, Color32, ColorImage, Pos2, Rect, RichText,
-        Slider, TextureHandle, TextureOptions, Ui, WidgetText,
-    },
     EguiContext, EguiContexts, EguiGlobalSettings,
+    egui::{
+        self, Color32, ColorImage, Pos2, Rect, RichText, Slider, TextureHandle, TextureOptions, Ui,
+        WidgetText, emath::Numeric, style::HandleShape,
+    },
 };
 use bevy_enoki::prelude::*;
 use egui_plot::{Line, PlotPoints};
 
-use crate::{bevy_to_egui_color, egui_to_bevy_color, BloomSettings, SceneSettings};
+use crate::{BloomSettings, SceneSettings, bevy_to_egui_color, egui_to_bevy_color};
 
 pub(crate) fn scene_gui(ui: &mut Ui, settings: &mut SceneSettings) {
     egui::Grid::new("scene_setting")
@@ -309,6 +309,7 @@ pub(crate) fn config_gui(
                     position: Vec2::new(0.0, 0.0),
                     strength: 10000.0,
                     min_distance: 5.0,
+                    despawn_on_arrival: false,
                 });
             }
         } else {
@@ -318,6 +319,7 @@ pub(crate) fn config_gui(
                     position: Vec2::new(0.0, 0.0),
                     strength: 10000.0,
                     min_distance: 5.0,
+                    despawn_on_arrival: false,
                 }]);
             }
         }

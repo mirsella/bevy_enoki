@@ -7,16 +7,16 @@ use self::prelude::{
 };
 use crate::sprite::SpriteParticle2dMaterial;
 use bevy_app::{App, First, Plugin, PostUpdate, Update};
-use bevy_asset::{load_internal_asset, uuid_handle, Asset, AssetApp, AssetEvent, Assets, Handle};
+use bevy_asset::{Asset, AssetApp, AssetEvent, Assets, Handle, load_internal_asset, uuid_handle};
 use bevy_camera::{
     primitives::Aabb,
-    visibility::{add_visibility_class, Visibility, VisibilityClass, VisibilitySystems},
+    visibility::{Visibility, VisibilityClass, VisibilitySystems, add_visibility_class},
 };
 use bevy_color::LinearRgba;
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::{
     component::Component,
-    schedule::{common_conditions::on_message, IntoScheduleConfigs},
+    schedule::{IntoScheduleConfigs, common_conditions::on_message},
 };
 use bevy_math::Vec2;
 use bevy_reflect::{Reflect, TypePath};
@@ -194,6 +194,9 @@ pub struct Attractor {
     pub position: Vec2,
     pub strength: f32,
     pub min_distance: f32,
+    /// If true, particles will be despawned when they reach within `min_distance` of the attractor.
+    #[serde(default)]
+    pub despawn_on_arrival: bool,
 }
 
 /// holds the effect asset. Changing the Asset, will
