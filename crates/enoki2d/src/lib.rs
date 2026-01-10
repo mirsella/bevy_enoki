@@ -7,16 +7,16 @@ use self::prelude::{
 };
 use crate::sprite::SpriteParticle2dMaterial;
 use bevy_app::{App, First, Plugin, PostUpdate, Update};
-use bevy_asset::{Asset, AssetApp, AssetEvent, Assets, Handle, load_internal_asset, uuid_handle};
+use bevy_asset::{load_internal_asset, uuid_handle, Asset, AssetApp, AssetEvent, Assets, Handle};
 use bevy_camera::{
     primitives::Aabb,
-    visibility::{Visibility, VisibilityClass, VisibilitySystems, add_visibility_class},
+    visibility::{add_visibility_class, Visibility, VisibilityClass, VisibilitySystems},
 };
 use bevy_color::LinearRgba;
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::{
     component::Component,
-    schedule::{IntoScheduleConfigs, common_conditions::on_message},
+    schedule::{common_conditions::on_message, IntoScheduleConfigs},
 };
 use bevy_math::Vec2;
 use bevy_reflect::{Reflect, TypePath};

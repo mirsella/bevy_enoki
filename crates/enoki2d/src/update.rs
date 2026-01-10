@@ -1,4 +1,4 @@
-use super::{Particle2dEffect, ParticleEffectHandle, prelude::EmissionShape};
+use super::{prelude::EmissionShape, Particle2dEffect, ParticleEffectHandle};
 use crate::values::Random;
 use bevy_asset::Assets;
 use bevy_camera::primitives::Aabb;
@@ -12,7 +12,7 @@ use bevy_ecs::{
     system::{Commands, Query, Res},
 };
 use bevy_math::{Vec2, Vec3};
-use bevy_reflect::{Reflect, prelude::ReflectDefault};
+use bevy_reflect::{prelude::ReflectDefault, Reflect};
 use bevy_tasks::{ComputeTaskPool, ParallelSliceMut};
 use bevy_time::{Time, Timer, TimerMode, Virtual};
 use bevy_transform::components::{GlobalTransform, Transform};
