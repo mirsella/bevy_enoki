@@ -284,8 +284,14 @@ impl From<&Particle> for InstanceData {
         let transpose_model_3x3 = value.transform.compute_affine().matrix3.transpose();
         let vh = &value.velocity_history;
         // Use actual movement velocity for orientation (where particle IS moving)
-        // This ensures the trail follows the actual trajectory
         let head_dir = vh[0];
+
+        // Calculate tail offset: Vector from current position to lagged position
+        // This gives us the exact world-space vector to where the tail should be
+        let current_pos = value.transform.translation.truncate();
+        let lagged_pos = vh[1]; // We repurposed vh[1] as position in update.rs
+        let tail_offset = lagged_pos - current_pos;
+
         Self {
             transform: [
                 transpose_model_3x3
@@ -305,7 +311,8 @@ impl From<&Particle> for InstanceData {
                 head_dir.x,
                 head_dir.y,
             ),
-            velocity_history_0: Vec4::new(vh[0].x, vh[0].y, vh[1].x, vh[1].y),
+            // Pass tail_offset in .zw (formerly vh[1])
+            velocity_history_0: Vec4::new(vh[0].x, vh[0].y, tail_offset.x, tail_offset.y),
             velocity_history_1: Vec4::new(vh[2].x, vh[2].y, 0.0, 0.0),
         }
     }

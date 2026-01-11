@@ -9,4 +9,5 @@ struct VertexOutput {
 	@location(4) @interpolate(flat) velocity_dir : vec2<f32>,
 	@location(5) @interpolate(flat) vel_hist_a : vec4<f32>,
 	@location(6) @interpolate(flat) vel_hist_b : vec4<f32>,
+    @location(7) @interpolate(flat) scale : f32,
 };

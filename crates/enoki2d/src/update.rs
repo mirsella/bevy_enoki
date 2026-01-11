@@ -11,6 +11,7 @@ use bevy_ecs::{
     reflect::ReflectComponent,
     system::{Commands, Query, Res},
 };
+use bevy_math::Quat;
 use bevy_math::{Vec2, Vec3};
 use bevy_reflect::{Reflect, prelude::ReflectDefault};
 use bevy_tasks::{ComputeTaskPool, ParallelSliceMut};
@@ -81,8 +82,6 @@ pub struct Particle {
     /// Ring buffer of previous normalized velocity directions for trail rendering.
     /// Index 0 is most recent, index 2 is oldest.
     pub(crate) velocity_history: [Vec2; 3],
-    /// Accumulator for velocity history sampling (samples every ~25ms)
-    pub(crate) velocity_sample_timer: f32,
 }
 
 pub(crate) fn clone_effect(
@@ -264,6 +263,9 @@ fn create_particle(effect: &Particle2dEffect, transform: &Transform) -> Particle
     };
 
     let initial_vel_dir = direction.normalize_or_zero();
+    let initial_pos = transform.translation.truncate();
+
+    // vh[0] = direction, vh[1] = position (for trail target), vh[2] = unused
     Particle {
         transform,
         velocity: ((direction * speed).extend(0.), angular),
@@ -278,8 +280,7 @@ fn create_particle(effect: &Particle2dEffect, transform: &Transform) -> Particle
         gravity_speed,
         frame: 0,
         reached_attractor: false,
-        velocity_history: [initial_vel_dir, initial_vel_dir, initial_vel_dir],
-        velocity_sample_timer: 0.0,
+        velocity_history: [initial_vel_dir, initial_pos, Vec2::ZERO],
     }
 }
 
@@ -331,24 +332,43 @@ fn update_particle(
 
     // Sample velocity history for trail rendering AFTER attractor forces are applied
     // This captures the actual movement direction including attractor influence
-    // Sample every frame for responsive trail, but only shift history periodically
-    const VELOCITY_SAMPLE_INTERVAL: f32 = 0.025;
-    particle.velocity_sample_timer += delta;
+    // Use exponential smoothing for continuous trail bending instead of discrete snapshots
 
     // Always update the most recent velocity direction (slot 0)
     let current_dir = movement.truncate().normalize_or_zero();
-    particle.velocity_history[0] = current_dir;
 
-    // Periodically shift history for trail curve segments
-    if particle.velocity_sample_timer >= VELOCITY_SAMPLE_INTERVAL {
-        particle.velocity_sample_timer -= VELOCITY_SAMPLE_INTERVAL;
-        // Shift history: [1] -> [2], [0] -> [1]
-        particle.velocity_history[2] = particle.velocity_history[1];
-        particle.velocity_history[1] = current_dir;
+    // === TRAIL LOGIC: Position History ===
+    // vh[0]: Current Velocity Direction (Normalized)
+    // CRITICAL: Only update direction if moving. Preserves orientation when stopped.
+    if movement.length_squared() > 0.000001 {
+        particle.velocity_history[0] = current_dir;
     }
 
+    // vh[1]: Lagged World Position (Vec2) - used to target the tail
+    // SAFETY: If history is zero (uninitialized), snap to current position immediately
+    if particle.velocity_history[1] == Vec2::ZERO {
+        particle.velocity_history[1] = particle.transform.translation.truncate();
+    }
+
+    // Initialize if it's the first frame (approx check via duration)
+    if particle.duration_fraction < delta / particle.duration * 2.0 {
+        particle.velocity_history[1] = particle.transform.translation.truncate();
+    }
+
+    // Smoothly pull lagged position toward current position
+    // Higher factor = faster catchup = shorter trail
+    let lag_factor = (delta * 10.0).min(1.0);
+    particle.velocity_history[1] =
+        particle.velocity_history[1].lerp(particle.transform.translation.truncate(), lag_factor);
+
+    // vh[2]: Unused for now
+    particle.velocity_history[2] = Vec2::ZERO;
+
     particle.transform.translation += movement;
-    particle.transform.rotate_local_z(*rot_velo * delta);
+    // CRITICAL: Force identity rotation so the quad is always axis-aligned.
+    // This ensures the shader's UV space aligns with World Space, allowing
+    // correct projection of the trail onto the world velocity vector.
+    particle.transform.rotation = Quat::IDENTITY;
 
     // Check if particle reached any attractor with despawn_on_arrival enabled
     if let Some(attractors) = &effect.attractors {

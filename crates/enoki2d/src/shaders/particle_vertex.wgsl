@@ -38,6 +38,7 @@ fn vertex(in: VertexIn) -> VertexOutput {
 	out.velocity_dir = in.i_lifetime.zw;
 	out.vel_hist_a = in.i_velocity_history_0;
 	out.vel_hist_b = in.i_velocity_history_1;
+    out.scale = in.i_scale.x;
 
     return out;
 }
