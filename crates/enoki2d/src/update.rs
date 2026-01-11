@@ -1,4 +1,4 @@
-use super::{prelude::EmissionShape, Particle2dEffect, ParticleEffectHandle};
+use super::{Particle2dEffect, ParticleEffectHandle, prelude::EmissionShape};
 use crate::values::Random;
 use bevy_asset::Assets;
 use bevy_camera::primitives::Aabb;
@@ -12,7 +12,7 @@ use bevy_ecs::{
     system::{Commands, Query, Res},
 };
 use bevy_math::{Vec2, Vec3};
-use bevy_reflect::{prelude::ReflectDefault, Reflect};
+use bevy_reflect::{Reflect, prelude::ReflectDefault};
 use bevy_tasks::{ComputeTaskPool, ParallelSliceMut};
 use bevy_time::{Time, Timer, TimerMode, Virtual};
 use bevy_transform::components::{GlobalTransform, Transform};
@@ -78,6 +78,11 @@ pub struct Particle {
     pub(crate) gravity_direction: Vec3,
     /// Set to true when a particle reaches an attractor with `despawn_on_arrival`.
     pub(crate) reached_attractor: bool,
+    /// Ring buffer of previous normalized velocity directions for trail rendering.
+    /// Index 0 is most recent, index 2 is oldest.
+    pub(crate) velocity_history: [Vec2; 3],
+    /// Accumulator for velocity history sampling (samples every ~25ms)
+    pub(crate) velocity_sample_timer: f32,
 }
 
 pub(crate) fn clone_effect(
@@ -258,6 +263,7 @@ fn create_particle(effect: &Particle2dEffect, transform: &Transform) -> Particle
         }
     };
 
+    let initial_vel_dir = direction.normalize_or_zero();
     Particle {
         transform,
         velocity: ((direction * speed).extend(0.), angular),
@@ -272,6 +278,8 @@ fn create_particle(effect: &Particle2dEffect, transform: &Transform) -> Particle
         gravity_speed,
         frame: 0,
         reached_attractor: false,
+        velocity_history: [initial_vel_dir, initial_vel_dir, initial_vel_dir],
+        velocity_sample_timer: 0.0,
     }
 }
 
@@ -320,6 +328,24 @@ fn update_particle(
     let gravity = particle.gravity_direction * particle.gravity_speed * delta;
     let movement = *lin_velo * delta + gravity;
     let old_pos = particle.transform.translation;
+
+    // Sample velocity history for trail rendering AFTER attractor forces are applied
+    // This captures the actual movement direction including attractor influence
+    // Sample every frame for responsive trail, but only shift history periodically
+    const VELOCITY_SAMPLE_INTERVAL: f32 = 0.025;
+    particle.velocity_sample_timer += delta;
+
+    // Always update the most recent velocity direction (slot 0)
+    let current_dir = movement.truncate().normalize_or_zero();
+    particle.velocity_history[0] = current_dir;
+
+    // Periodically shift history for trail curve segments
+    if particle.velocity_sample_timer >= VELOCITY_SAMPLE_INTERVAL {
+        particle.velocity_sample_timer -= VELOCITY_SAMPLE_INTERVAL;
+        // Shift history: [1] -> [2], [0] -> [1]
+        particle.velocity_history[2] = particle.velocity_history[1];
+        particle.velocity_history[1] = current_dir;
+    }
 
     particle.transform.translation += movement;
     particle.transform.rotate_local_z(*rot_velo * delta);

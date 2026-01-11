@@ -1,6 +1,6 @@
 use crate::RenderParticleTag;
 
-use super::{update::Particle, ParticleSpawner, ParticleStore};
+use super::{ParticleSpawner, ParticleStore, update::Particle};
 use bevy_app::{App, Plugin};
 use bevy_asset::{Asset, AssetApp, AssetEvent, AssetId, AssetServer, Assets, Handle};
 use bevy_camera::visibility::ViewVisibility;
@@ -14,8 +14,8 @@ use bevy_ecs::{
     resource::Resource,
     schedule::IntoScheduleConfigs,
     system::{
-        lifetimeless::{Read, SRes},
         Commands, Query, Res, ResMut, SystemParamItem,
+        lifetimeless::{Read, SRes},
     },
     world::{FromWorld, World},
 };
@@ -24,27 +24,25 @@ use bevy_math::{FloatOrd, Vec4};
 use bevy_mesh::{PrimitiveTopology, VertexBufferLayout};
 use bevy_reflect::Reflect;
 use bevy_render::{
+    Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
     render_asset::{PrepareAssetError, RenderAsset, RenderAssetPlugin, RenderAssets},
     render_phase::{
         AddRenderCommand, DrawFunctions, PhaseItem, PhaseItemExtraIndex, RenderCommand,
         RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases,
     },
     render_resource::{
-        binding_types::uniform_buffer, AsBindGroup, AsBindGroupError, BindGroup, BindGroupEntries,
-        BindGroupLayout, BindGroupLayoutEntries, BlendState, BufferUsages, BufferVec,
-        ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState,
+        AsBindGroup, AsBindGroupError, BindGroup, BindGroupEntries, BindGroupLayout,
+        BindGroupLayoutEntries, BlendState, BufferUsages, BufferVec, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState,
         FrontFace, IndexFormat, OwnedBindingResource, PipelineCache, PolygonMode, PrimitiveState,
         RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline,
-        SpecializedRenderPipelines, StencilFaceState, StencilState, TextureFormat, VertexAttribute,
-        VertexFormat, VertexStepMode,
+        SpecializedRenderPipelines, StencilFaceState, StencilState, TextureFormat, VertexAttribute, VertexFormat, VertexStepMode,
+        binding_types::uniform_buffer,
     },
     renderer::{RenderDevice, RenderQueue},
     sync_world::RenderEntity,
     view::{
-        ExtractedView, Msaa, RenderVisibleEntities, ViewTarget, ViewUniform, ViewUniformOffset,
-        ViewUniforms,
+        ExtractedView, Msaa, RenderVisibleEntities, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms,
     },
-    Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
 };
 use bevy_shader::{Shader, ShaderRef};
 use bevy_sprite_render::Mesh2dPipelineKey;
@@ -275,12 +273,19 @@ pub struct InstanceData {
     transform: [Vec4; 3],
     color: [f32; 4],
     custom: Vec4,
+    /// Velocity history packed as: (vel0.x, vel0.y, vel1.x, vel1.y) and (vel2.x, vel2.y, 0, 0)
+    velocity_history_0: Vec4,
+    velocity_history_1: Vec4,
 }
 
 impl From<&Particle> for InstanceData {
     #[inline(always)]
     fn from(value: &Particle) -> Self {
         let transpose_model_3x3 = value.transform.compute_affine().matrix3.transpose();
+        let vh = &value.velocity_history;
+        // Use actual movement velocity for orientation (where particle IS moving)
+        // This ensures the trail follows the actual trajectory
+        let head_dir = vh[0];
         Self {
             transform: [
                 transpose_model_3x3
@@ -294,7 +299,14 @@ impl From<&Particle> for InstanceData {
                     .extend(value.transform.translation.z),
             ],
             color: value.color.to_f32_array(),
-            custom: Vec4::new(value.duration_fraction, value.duration, 0., 0.),
+            custom: Vec4::new(
+                value.duration_fraction,
+                value.duration,
+                head_dir.x,
+                head_dir.y,
+            ),
+            velocity_history_0: Vec4::new(vh[0].x, vh[0].y, vh[1].x, vh[1].y),
+            velocity_history_1: Vec4::new(vh[2].x, vh[2].y, 0.0, 0.0),
         }
     }
 }
@@ -477,7 +489,7 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                 shader_defs: vec![],
                 entry_point: Some("vertex".into()),
                 buffers: vec![VertexBufferLayout {
-                    array_stride: 80,
+                    array_stride: 112,
                     step_mode: VertexStepMode::Instance,
                     attributes: vec![
                         // translation
@@ -504,11 +516,23 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                             offset: 48,
                             shader_location: 3,
                         },
-                        // custom
+                        // custom (lifetime_frac, lifetime_total, vel_dir.x, vel_dir.y)
                         VertexAttribute {
                             format: VertexFormat::Float32x4,
                             offset: 64,
                             shader_location: 4,
+                        },
+                        // velocity_history_0 (vel0.xy, vel1.xy)
+                        VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset: 80,
+                            shader_location: 5,
+                        },
+                        // velocity_history_1 (vel2.xy, unused)
+                        VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset: 96,
+                            shader_location: 6,
                         },
                     ],
                 }],
