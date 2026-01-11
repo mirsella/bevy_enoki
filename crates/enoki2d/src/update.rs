@@ -36,6 +36,10 @@ pub struct ParticleSpawnerState {
     pub active: bool,
     pub timer: Timer,
     pub previous_position: Option<Vec3>,
+    /// Positions of particles that reached an attractor this frame.
+    /// Used to trigger impact effects at the correct location.
+    #[reflect(ignore)]
+    pub attractor_arrivals: Vec<Vec3>,
 }
 
 /// A clone of the asset, unique to each spawner
@@ -52,6 +56,7 @@ impl Default for ParticleSpawnerState {
             max_particles: u32::MAX,
             timer: Timer::new(Duration::ZERO, TimerMode::Repeating),
             previous_position: None,
+            attractor_arrivals: Vec::new(),
         }
     }
 }
@@ -180,6 +185,15 @@ pub(crate) fn update_spawner(
                     update_particle(particle, effect, delta, spawner_world_pos);
                 }
             });
+
+            // Collect positions of particles that reached an attractor
+            // We overwrite the list each frame, so it contains only this frame's arrivals
+            state.attractor_arrivals = store
+                .iter()
+                .filter(|p| p.reached_attractor)
+                .map(|p| p.transform.translation)
+                .collect();
+
             store
                 .retain(|particle| particle.duration_fraction < 1.0 && !particle.reached_attractor);
         },
