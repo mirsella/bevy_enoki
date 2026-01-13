@@ -4,9 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { version = "0.17.1", features = ["file_watcher"] }
+bevy = { version = "0.17.1" }
 bevy_enoki = { path = "../crates/enoki2d" }
 rand = "0.8.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.17.1", features = ["file_watcher"] }
+
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
 
 [[bin]]
 name = "sprites"
