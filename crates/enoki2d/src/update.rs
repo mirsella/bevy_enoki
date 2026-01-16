@@ -325,8 +325,10 @@ fn update_particle(
     if let Some(attractors) = &effect.attractors {
         for attractor in attractors.iter() {
             // Transform attractor position from local to world space
-            let attractor_world_pos = spawner_world_pos + attractor.position.extend(0.0);
-            let to_attractor = attractor_world_pos - particle.transform.translation;
+            // We use 2D logic for physics to avoid Z-axis sorting interfering with distance checks
+            let attractor_world_pos = spawner_world_pos.truncate() + attractor.position;
+            let particle_pos_2d = particle.transform.translation.truncate();
+            let to_attractor = attractor_world_pos - particle_pos_2d;
             let distance_sq = to_attractor.length_squared();
 
             if distance_sq > 0.0 {
@@ -335,7 +337,7 @@ fn update_particle(
                 let force_magnitude = attractor.strength / distance_sq.max(min_distance_sq);
                 let force_direction = to_attractor / distance;
 
-                *lin_velo += force_direction * force_magnitude * delta;
+                *lin_velo += force_direction.extend(0.0) * force_magnitude * delta;
             }
         }
     }
@@ -391,9 +393,10 @@ fn update_particle(
                 continue;
             }
 
-            let attractor_world_pos = spawner_world_pos + attractor.position.extend(0.0);
-            let to_attractor = attractor_world_pos - particle.transform.translation;
-            let distance_sq = to_attractor.length_squared();
+            // Use 2D positions for reliable hit detection (ignoring Z-depth)
+            let attractor_world_pos = spawner_world_pos.truncate() + attractor.position;
+            let particle_pos = particle.transform.translation.truncate();
+            let distance_sq = (attractor_world_pos - particle_pos).length_squared();
             let min_distance_sq = attractor.min_distance * attractor.min_distance;
 
             // Particle is within capture radius
@@ -402,12 +405,44 @@ fn update_particle(
                 return;
             }
 
-            // Fast particle detection: crossed past the attractor in one frame
-            // (was approaching, now receding)
-            let old_to_attractor = attractor_world_pos - old_pos;
-            if old_to_attractor.dot(movement) > 0.0 && to_attractor.dot(movement) < 0.0 {
-                particle.reached_attractor = true;
-                return;
+            // Fast particle detection: check if movement segment passes within min_distance of attractor
+            let old_pos_2d = old_pos.truncate();
+            let movement_2d = movement.truncate();
+            let old_to_attractor = attractor_world_pos - old_pos_2d;
+            let segment_len_sq = movement_2d.length_squared();
+
+            if segment_len_sq > 0.000001 {
+                let t = old_to_attractor.dot(movement_2d) / segment_len_sq;
+                let t_clamped = t.clamp(0.0, 1.0);
+                let closest_point = old_pos_2d + movement_2d * t_clamped;
+                let closest_dist_sq = (attractor_world_pos - closest_point).length_squared();
+
+                // 1. Segment Check: Did we pass strictly within the kill radius (plus tolerance)?
+                if closest_dist_sq <= min_distance_sq * 4.0 {
+                    particle.reached_attractor = true;
+                    return;
+                }
+
+                // 2. Periapsis/Exit Check (User Request: "passed by the attractor")
+                // If the particle is reasonably close (e.g. within 3x radius) but is now moving AWAY
+                // from the attractor, it means it missed the bullseye but passed by.
+                // We capture it now to prevent it from orbiting or flying off.
+                //
+                // Check if moving away: dot(velocity, to_attractor) < 0
+                // We use the *new* velocity (lin_velo) which dictates the next frame's movement.
+                let lin_velo_2d = particle.velocity.0.truncate();
+                let current_to_attractor =
+                    attractor_world_pos - particle.transform.translation.truncate();
+
+                let is_moving_away = lin_velo_2d.dot(current_to_attractor) < 0.0;
+
+                // Use a larger threshold for "near miss" (3x radius -> 9x sq)
+                let near_miss_sq = min_distance_sq * 9.0;
+
+                if is_moving_away && distance_sq <= near_miss_sq {
+                    particle.reached_attractor = true;
+                    return;
+                }
             }
         }
     }
