@@ -5,7 +5,7 @@ use bevy_app::{App, Plugin};
 use bevy_asset::{Asset, AssetApp, AssetEvent, AssetId, AssetServer, Assets, Handle};
 use bevy_camera::visibility::ViewVisibility;
 use bevy_color::ColorToComponents;
-use bevy_core_pipeline::core_2d::{Transparent2d, CORE_2D_DEPTH_FORMAT};
+use bevy_core_pipeline::core_2d::{CORE_2D_DEPTH_FORMAT, Transparent2d};
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::{
     component::Component,
@@ -32,16 +32,18 @@ use bevy_render::{
     },
     render_resource::{
         AsBindGroup, AsBindGroupError, BindGroup, BindGroupEntries, BindGroupLayout,
-        BindGroupLayoutEntries, BlendState, BufferUsages, BufferVec, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState,
-        FrontFace, IndexFormat, OwnedBindingResource, PipelineCache, PolygonMode, PrimitiveState,
-        RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline,
-        SpecializedRenderPipelines, StencilFaceState, StencilState, TextureFormat, VertexAttribute, VertexFormat, VertexStepMode,
-        binding_types::uniform_buffer,
+        BindGroupLayoutEntries, BlendState, BufferUsages, BufferVec, ColorTargetState, ColorWrites,
+        CompareFunction, DepthBiasState, DepthStencilState, FrontFace, IndexFormat,
+        OwnedBindingResource, PipelineCache, PolygonMode, PrimitiveState, RenderPipelineDescriptor,
+        ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines,
+        StencilFaceState, StencilState, TextureFormat, VertexAttribute, VertexFormat,
+        VertexStepMode, binding_types::uniform_buffer,
     },
     renderer::{RenderDevice, RenderQueue},
     sync_world::RenderEntity,
     view::{
-        ExtractedView, Msaa, RenderVisibleEntities, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms,
+        ExtractedView, Msaa, RenderVisibleEntities, ViewTarget, ViewUniform, ViewUniformOffset,
+        ViewUniforms,
     },
 };
 use bevy_shader::{Shader, ShaderRef};
@@ -55,6 +57,12 @@ use std::{hash::Hash, ops::Range};
 pub trait Particle2dMaterial: AsBindGroup + Asset + Clone + Sized {
     fn fragment_shader() -> ShaderRef {
         super::PARTICLE_COLOR_FRAG.into()
+    }
+
+    /// Override to change blending mode. Defaults to alpha blending.
+    /// Use `BlendState::ADDITIVE` for glow effects, `BlendState::PREMULTIPLIED_ALPHA_BLENDING` for pre-multiplied alpha.
+    fn blend_state() -> BlendState {
+        BlendState::ALPHA_BLENDING
     }
 }
 
@@ -550,7 +558,7 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                 entry_point: Some("fragment".into()),
                 targets: vec![Some(ColorTargetState {
                     format,
-                    blend: Some(BlendState::ALPHA_BLENDING),
+                    blend: Some(M::blend_state()),
                     write_mask: ColorWrites::ALL,
                 })],
             }),
