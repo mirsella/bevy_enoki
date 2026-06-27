@@ -193,6 +193,9 @@ pub struct Attractor {
     pub position: Vec2,
     pub strength: f32,
     pub min_distance: f32,
+    /// If true, particles are removed when they reach this attractor.
+    #[serde(default)]
+    pub despawn_on_arrival: bool,
 }
 
 /// holds the effect asset. Changing the Asset, will

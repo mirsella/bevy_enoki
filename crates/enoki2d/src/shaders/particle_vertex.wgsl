@@ -8,6 +8,8 @@ struct VertexIn {
     @location(0) i_transform: vec4<f32>,
     @location(1) i_scale_lifetime: vec4<f32>,
     @location(2) i_color: vec4<f32>,
+    @location(3) i_velocity_history_0: vec4<f32>,
+    @location(4) i_velocity_history_1: vec4<f32>,
 };
 
 @vertex
@@ -38,6 +40,10 @@ fn vertex(in: VertexIn) -> VertexOutput {
 
 	out.lifetime_frac = in.i_scale_lifetime.z;
 	out.lifetime_total = in.i_scale_lifetime.w;
+    out.velocity_dir = in.i_velocity_history_0.xy;
+    out.vel_hist_a = in.i_velocity_history_0;
+    out.vel_hist_b = in.i_velocity_history_1;
+    out.scale = in.i_scale_lifetime.x;
 
     return out;
 }
