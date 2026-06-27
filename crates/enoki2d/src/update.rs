@@ -35,6 +35,8 @@ pub struct ParticleSpawnerState {
     pub active: bool,
     pub timer: Timer,
     pub previous_position: Option<Vec3>,
+    #[reflect(ignore)]
+    pub attractor_arrivals: Vec<Vec3>,
 }
 
 /// A clone of the asset, unique to each spawner
@@ -51,6 +53,7 @@ impl Default for ParticleSpawnerState {
             max_particles: u32::MAX,
             timer: Timer::new(Duration::ZERO, TimerMode::Repeating),
             previous_position: None,
+            attractor_arrivals: Vec::new(),
         }
     }
 }
@@ -84,6 +87,11 @@ pub struct ParticleStore {
     pub(crate) gravity_x: Vec<f32>,
     pub(crate) gravity_y: Vec<f32>,
     pub(crate) gravity_z: Vec<f32>,
+    pub(crate) velocity_dir_x: Vec<f32>,
+    pub(crate) velocity_dir_y: Vec<f32>,
+    pub(crate) tail_position_x: Vec<f32>,
+    pub(crate) tail_position_y: Vec<f32>,
+    pub(crate) reached_attractor: Vec<bool>,
 }
 
 impl ParticleStore {
@@ -128,6 +136,11 @@ impl ParticleStore {
             gravity_x,
             gravity_y,
             gravity_z,
+            velocity_dir_x,
+            velocity_dir_y,
+            tail_position_x,
+            tail_position_y,
+            reached_attractor,
         );
     }
 
@@ -173,6 +186,12 @@ impl ParticleStore {
         self.gravity_x.push(gravity_direction.x);
         self.gravity_y.push(gravity_direction.y);
         self.gravity_z.push(gravity_direction.z);
+        let initial_direction = velocity.truncate().normalize_or_zero();
+        self.velocity_dir_x.push(initial_direction.x);
+        self.velocity_dir_y.push(initial_direction.y);
+        self.tail_position_x.push(transform.translation.x);
+        self.tail_position_y.push(transform.translation.y);
+        self.reached_attractor.push(false);
     }
 
     fn swap_remove(&mut self, index: usize) {
@@ -208,12 +227,24 @@ impl ParticleStore {
             gravity_x,
             gravity_y,
             gravity_z,
+            velocity_dir_x,
+            velocity_dir_y,
+            tail_position_x,
+            tail_position_y,
+            reached_attractor,
         );
     }
 
-    fn remove_expired(&mut self) {
+    fn remove_expired_and_reached(&mut self, state: &mut ParticleSpawnerState) {
         for index in (0..self.len()).rev() {
-            if self.duration_fraction[index] >= 1.0 {
+            if self.reached_attractor[index] {
+                state.attractor_arrivals.push(Vec3::new(
+                    self.position_x[index],
+                    self.position_y[index],
+                    self.position_z[index],
+                ));
+                self.swap_remove(index);
+            } else if self.duration_fraction[index] >= 1.0 {
                 self.swap_remove(index);
             }
         }
@@ -264,6 +295,8 @@ pub(crate) fn update_spawner(
 ) {
     particles.par_iter_mut().for_each(
         |(entity, mut store, mut state, effect_instance, transform)| {
+            state.attractor_arrivals.clear();
+
             if state.max_particles <= store.len() as u32 {
                 return;
             }
@@ -306,7 +339,7 @@ pub(crate) fn update_spawner(
             };
 
             update_particles(&mut store, effect, delta, spawner_world_pos, position_delta);
-            store.remove_expired();
+            store.remove_expired_and_reached(&mut state);
         },
     );
 }
@@ -436,6 +469,8 @@ fn update_particles_simd(
         let mut px = load8(&particles.position_x, index) + f32x8::splat(position_delta.x);
         let mut py = load8(&particles.position_y, index) + f32x8::splat(position_delta.y);
         let mut pz = load8(&particles.position_z, index) + f32x8::splat(position_delta.z);
+        let old_px = px;
+        let old_py = py;
         let progress =
             load8(&particles.duration_fraction, index) + delta8 / load8(&particles.duration, index);
 
@@ -478,8 +513,10 @@ fn update_particles_simd(
         }
 
         let gravity = load8(&particles.gravity_speed, index) * delta8;
-        px += vx * delta8 + load8(&particles.gravity_x, index) * gravity;
-        py += vy * delta8 + load8(&particles.gravity_y, index) * gravity;
+        let movement_x = vx * delta8 + load8(&particles.gravity_x, index) * gravity;
+        let movement_y = vy * delta8 + load8(&particles.gravity_y, index) * gravity;
+        px += movement_x;
+        py += movement_y;
         pz += vz * delta8 + load8(&particles.gravity_z, index) * gravity;
         let rotation = load8(&particles.rotation, index) + angular_velocity * delta8;
 
@@ -492,6 +529,27 @@ fn update_particles_simd(
         store8(&mut particles.velocity_z, index, vz);
         store8(&mut particles.angular_velocity, index, angular_velocity);
         store8(&mut particles.rotation, index, rotation);
+
+        let old_px = old_px.to_array();
+        let old_py = old_py.to_array();
+        let movement_x = movement_x.to_array();
+        let movement_y = movement_y.to_array();
+        let vx = vx.to_array();
+        let vy = vy.to_array();
+        for lane in 0..8 {
+            update_particle_history_and_arrival(
+                particles,
+                index + lane,
+                ParticleMotion {
+                    old_position: Vec2::new(old_px[lane], old_py[lane]),
+                    movement: Vec2::new(movement_x[lane], movement_y[lane]),
+                    velocity: Vec2::new(vx[lane], vy[lane]),
+                },
+                effect,
+                spawner_world_pos,
+                delta,
+            );
+        }
     }
 
     for index in simd_len..particles.len() {
@@ -536,6 +594,7 @@ fn update_particle_scalar(
     particles.position_x[index] += position_delta.x;
     particles.position_y[index] += position_delta.y;
     particles.position_z[index] += position_delta.z;
+    let old_position = Vec2::new(particles.position_x[index], particles.position_y[index]);
     particles.duration_fraction[index] += delta / particles.duration[index];
     let progress = particles.duration_fraction[index];
 
@@ -572,14 +631,122 @@ fn update_particle_scalar(
     }
 
     let gravity = particles.gravity_speed[index] * delta;
-    particles.position_x[index] +=
-        particles.velocity_x[index] * delta + particles.gravity_x[index] * gravity;
-    particles.position_y[index] +=
-        particles.velocity_y[index] * delta + particles.gravity_y[index] * gravity;
+    let movement = Vec2::new(
+        particles.velocity_x[index] * delta + particles.gravity_x[index] * gravity,
+        particles.velocity_y[index] * delta + particles.gravity_y[index] * gravity,
+    );
+    particles.position_x[index] += movement.x;
+    particles.position_y[index] += movement.y;
     particles.position_z[index] +=
         particles.velocity_z[index] * delta + particles.gravity_z[index] * gravity;
 
     particles.rotation[index] += particles.angular_velocity[index] * delta;
+    let velocity = Vec2::new(particles.velocity_x[index], particles.velocity_y[index]);
+
+    update_particle_history_and_arrival(
+        particles,
+        index,
+        ParticleMotion {
+            old_position,
+            movement,
+            velocity,
+        },
+        effect,
+        spawner_world_pos,
+        delta,
+    );
+}
+
+struct ParticleMotion {
+    old_position: Vec2,
+    movement: Vec2,
+    velocity: Vec2,
+}
+
+fn update_particle_history_and_arrival(
+    particles: &mut ParticleStore,
+    index: usize,
+    motion: ParticleMotion,
+    effect: &Particle2dEffect,
+    spawner_world_pos: Vec3,
+    delta: f32,
+) {
+    if motion.movement.length_squared() > 0.000_001 {
+        let direction = motion.movement.normalize_or_zero();
+        particles.velocity_dir_x[index] = direction.x;
+        particles.velocity_dir_y[index] = direction.y;
+    }
+
+    let tail_position = Vec2::new(
+        particles.tail_position_x[index],
+        particles.tail_position_y[index],
+    );
+    let tail_position = if tail_position == Vec2::ZERO
+        || particles.duration_fraction[index] < delta / particles.duration[index] * 2.0
+    {
+        motion.old_position
+    } else {
+        tail_position.lerp(motion.old_position, (delta * 10.0).min(1.0))
+    };
+    particles.tail_position_x[index] = tail_position.x;
+    particles.tail_position_y[index] = tail_position.y;
+
+    // The trail shader projects world-space velocity onto an axis-aligned quad.
+    particles.rotation[index] = 0.0;
+
+    if let Some(attractors) = &effect.attractors {
+        for attractor in attractors {
+            if !attractor.despawn_on_arrival {
+                continue;
+            }
+
+            let attractor_world_position = spawner_world_pos.truncate() + attractor.position;
+            let current_position =
+                Vec2::new(particles.position_x[index], particles.position_y[index]);
+            if reached_attractor(
+                motion.old_position,
+                current_position,
+                motion.movement,
+                motion.velocity,
+                attractor_world_position,
+                attractor.min_distance,
+            ) {
+                particles.reached_attractor[index] = true;
+                return;
+            }
+        }
+    }
+}
+
+fn reached_attractor(
+    old_position: Vec2,
+    current_position: Vec2,
+    movement: Vec2,
+    velocity: Vec2,
+    attractor_position: Vec2,
+    min_distance: f32,
+) -> bool {
+    let min_distance_sq = min_distance * min_distance;
+    let current_to_attractor = attractor_position - current_position;
+    let distance_sq = current_to_attractor.length_squared();
+    if distance_sq <= min_distance_sq {
+        return true;
+    }
+
+    let segment_len_sq = movement.length_squared();
+    if segment_len_sq <= 0.000_001 {
+        return false;
+    }
+
+    let old_to_attractor = attractor_position - old_position;
+    let t = old_to_attractor.dot(movement) / segment_len_sq;
+    let closest_point = old_position + movement * t.clamp(0.0, 1.0);
+    let closest_dist_sq = (attractor_position - closest_point).length_squared();
+    if closest_dist_sq <= min_distance_sq * 4.0 {
+        return true;
+    }
+
+    velocity.dot(current_to_attractor) < 0.0 && distance_sq <= min_distance_sq * 9.0
 }
 
 pub(crate) fn calculate_particle_bounds(

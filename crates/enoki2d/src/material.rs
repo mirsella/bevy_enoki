@@ -54,6 +54,10 @@ pub trait Particle2dMaterial: AsBindGroup + Asset + Clone + Sized {
     fn fragment_shader() -> ShaderRef {
         super::PARTICLE_COLOR_FRAG.into()
     }
+
+    fn blend_state() -> BlendState {
+        BlendState::ALPHA_BLENDING
+    }
 }
 
 pub struct Particle2dMaterialPlugin<M: Particle2dMaterial> {
@@ -277,11 +281,20 @@ pub struct InstanceData {
     transform: Vec4,
     scale_lifetime: Vec4,
     color: Vec4,
+    velocity_history_0: Vec4,
+    velocity_history_1: Vec4,
 }
 
 impl InstanceData {
     #[inline(always)]
     fn from_store(store: &ParticleStore, index: usize) -> Self {
+        let tail_offset = Vec4::new(
+            store.tail_position_x[index] - store.position_x[index],
+            store.tail_position_y[index] - store.position_y[index],
+            0.0,
+            0.0,
+        );
+
         Self {
             // xyz is world position, including depth; w is the 2D angle.
             transform: Vec4::new(
@@ -302,6 +315,13 @@ impl InstanceData {
                 store.color_b[index],
                 store.color_a[index],
             ),
+            velocity_history_0: Vec4::new(
+                store.velocity_dir_x[index],
+                store.velocity_dir_y[index],
+                tail_offset.x,
+                tail_offset.y,
+            ),
+            velocity_history_1: Vec4::ZERO,
         }
     }
 }
@@ -334,6 +354,10 @@ mod tests {
             color_g: vec![0.5; PARTICLES],
             color_b: vec![0.25; PARTICLES],
             color_a: vec![1.0; PARTICLES],
+            velocity_dir_x: vec![0.0; PARTICLES],
+            velocity_dir_y: vec![1.0; PARTICLES],
+            tail_position_x: vec![0.0; PARTICLES],
+            tail_position_y: vec![1.0; PARTICLES],
             ..Default::default()
         };
         let mut buffer = BufferVec::new(BufferUsages::VERTEX);
@@ -370,7 +394,7 @@ mod tests {
 
     #[test]
     fn compact_instance_preserves_particle_data() {
-        assert_eq!(u64::from(InstanceData::min_size()), 48);
+        assert_eq!(u64::from(InstanceData::min_size()), 80);
 
         let mut store = ParticleStore::default();
         store.position_x.push(1.0);
@@ -386,10 +410,16 @@ mod tests {
         store.color_g.push(0.5);
         store.color_b.push(0.25);
         store.color_a.push(1.0);
+        store.velocity_dir_x.push(0.0);
+        store.velocity_dir_y.push(1.0);
+        store.tail_position_x.push(-1.0);
+        store.tail_position_y.push(4.0);
+        store.reached_attractor.push(false);
 
         let instance = InstanceData::from_store(&store, 0);
         assert_eq!(instance.transform, Vec4::new(1.0, 2.0, 3.0, 0.5));
         assert_eq!(instance.scale_lifetime, Vec4::new(4.0, 5.0, 0.25, 10.0));
+        assert_eq!(instance.velocity_history_0, Vec4::new(0.0, 1.0, -2.0, 2.0));
     }
 }
 
@@ -566,7 +596,7 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                 shader_defs: vec![],
                 entry_point: Some("vertex".into()),
                 buffers: vec![VertexBufferLayout {
-                    array_stride: 48,
+                    array_stride: 80,
                     step_mode: VertexStepMode::Instance,
                     attributes: vec![
                         // xyz position, z retains particle depth; w rotation
@@ -587,6 +617,18 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                             offset: 32,
                             shader_location: 2,
                         },
+                        // velocity direction and tail offset
+                        VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset: 48,
+                            shader_location: 3,
+                        },
+                        // reserved velocity history slot
+                        VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset: 64,
+                            shader_location: 4,
+                        },
                     ],
                 }],
             },
@@ -596,7 +638,7 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                 entry_point: Some("fragment".into()),
                 targets: vec![Some(ColorTargetState {
                     format: key.mesh_key.target_format(),
-                    blend: Some(BlendState::ALPHA_BLENDING),
+                    blend: Some(M::blend_state()),
                     write_mask: ColorWrites::ALL,
                 })],
             }),
