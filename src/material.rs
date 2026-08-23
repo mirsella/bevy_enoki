@@ -92,7 +92,8 @@ impl<M: Particle2dMaterial> Plugin for Particle2dMaterialPlugin<M> {
                 (
                     queue_particles::<M>.in_set(RenderSystems::Queue),
                     prepare_particles_instance_buffers::<M>.in_set(RenderSystems::PrepareResources),
-                ),
+                )
+                    .run_if(|buffer: Res<InstanceBuffer<M>>| !buffer.instance_buffer.is_empty()),
             );
     }
 
